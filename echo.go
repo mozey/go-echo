@@ -1,16 +1,18 @@
 package main
 
 import (
-	"fmt"
-	"github.com/gorilla/mux"
-	"log"
-	"net/http"
-	"time"
-	"flag"
 	"encoding/json"
-	"net/url"
-	"io/ioutil"
+	"flag"
+	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/mozey/logutil"
+	"github.com/rs/zerolog/log"
 )
 
 type Route struct {
@@ -36,20 +38,20 @@ type RequestBody struct {
 
 // Request is the same as http.Request minus the bits that break json.Marshall
 type Request struct {
-	Method string
-	URL *url.URL
-	Proto      string // "HTTP/1.0"
-	ProtoMajor int    // 1
-	ProtoMinor int    // 0
-	Header http.Header
-	Body RequestBody
-	ContentLength int64
+	Method           string
+	URL              *url.URL
+	Proto            string // "HTTP/1.0"
+	ProtoMajor       int    // 1
+	ProtoMinor       int    // 0
+	Header           http.Header
+	Body             RequestBody
+	ContentLength    int64
 	TransferEncoding []string
-	Host string
+	Host             string
 	//Form url.Values
 	//PostForm url.Values
 	//MultipartForm *multipart.Form
-	Trailer http.Header
+	Trailer    http.Header
 	RemoteAddr string
 	RequestURI string
 	//TLS *tls.ConnectionState
@@ -66,13 +68,15 @@ func echo(w http.ResponseWriter, r *http.Request) {
 	e.ProtoMinor = r.ProtoMinor
 	e.Header = r.Header
 	e.Body = RequestBody{}
-	body, err := ioutil.ReadAll(io.LimitReader(r.Body, 1 * megabytes))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1*megabytes))
 	if err != nil {
-		log.Fatal(err)
+		log.Error().Stack().Err(err).Msg("")
+		return
 	}
 	if err := r.Body.Close(); err != nil {
-        log.Fatal(err)
-    }
+		log.Error().Stack().Err(err).Msg("")
+		return
+	}
 	e.Body.String = string(body)
 	e.ContentLength = r.ContentLength
 	e.TransferEncoding = r.TransferEncoding
@@ -83,7 +87,12 @@ func echo(w http.ResponseWriter, r *http.Request) {
 
 	b, err := json.Marshal(e)
 	if err != nil {
-		log.Fatal(err)
+		log.Error().Stack().Err(err).Msg("")
+		return
+	}
+
+	if r.RequestURI != "/favicon.ico" {
+		log.Info().Interface("request", e).Msg("echo")
 	}
 	fmt.Fprint(w, string(b))
 }
@@ -100,13 +109,13 @@ func logger(inner http.Handler, name string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		inner.ServeHTTP(w, r)
-		log.Printf(
-			"%s\t%s\t%s\t%s",
-			r.Method,
-			r.RequestURI,
-			name,
-			time.Since(start),
-		)
+		if r.RequestURI != "/favicon.ico" {
+			log.Info().
+				Str("method", r.Method).
+				Str("request", r.RequestURI).
+				Str("route", name).
+				Msgf("%s", time.Since(start))
+		}
 	})
 }
 
@@ -125,11 +134,18 @@ func newRouter() *mux.Router {
 }
 
 func main() {
+	logutil.SetupLogger(true)
+
 	port := flag.Int("p", 80, "Port")
 	flag.Parse()
 
 	router := newRouter()
-	log.Println(fmt.Sprintf("Listening on port %v...", *port))
-	log.Fatal(http.ListenAndServe(
-		fmt.Sprintf(":%v", *port), router))
+	log.Info().Msgf("Listening on port %v...", *port)
+	err := http.ListenAndServe(
+		fmt.Sprintf(":%v", *port), router)
+	if err != nil {
+		log.Error().Stack().Err(err).Msg("")
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
